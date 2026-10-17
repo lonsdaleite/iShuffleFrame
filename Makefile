@@ -36,7 +36,7 @@ CFLAGS := -isysroot $(LEGACY_SDK) -fobjc-arc -fno-objc-exceptions -fno-objc-conv
 # addresses, and the CPU would run Thumb code in ARM mode.
 FRAMEWORKS := -framework Foundation -framework UIKit -framework CoreGraphics -framework Photos -framework ImageIO -framework QuartzCore
 
-.PHONY: all deb app sdk test clean
+.PHONY: all deb app sdk test ipa clean
 
 all: deb
 
@@ -85,6 +85,18 @@ deb: app
 	for f in postinst postrm; do $(SCRIPTS) packaging/$$f > $(STAGE)/DEBIAN/$$f && chmod 755 $(STAGE)/DEBIAN/$$f; done
 	dpkg-deb -Zgzip --root-owner-group -b $(STAGE) $(DEB)
 	@echo "Built $(DEB)"
+
+# Regular (iOS 15+) build as an unsigned .ipa: TrollStore, Sideloadly or AltStore sign it on install.
+IPA_DIR := build/ipa
+ipa:
+	xcodegen generate
+	rm -rf $(IPA_DIR) && mkdir -p $(IPA_DIR)/Payload
+	xcodebuild -project $(NAME).xcodeproj -scheme $(NAME) -configuration Release -destination 'generic/platform=iOS' \
+	    -derivedDataPath build/DerivedData -archivePath $(IPA_DIR)/$(NAME).xcarchive \
+	    CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= archive
+	cp -R $(IPA_DIR)/$(NAME).xcarchive/Products/Applications/$(NAME).app $(IPA_DIR)/Payload/
+	cd $(IPA_DIR) && zip -qry $(NAME)_$(VERSION)-$(BUILD).ipa Payload
+	@echo "Built $(IPA_DIR)/$(NAME)_$(VERSION)-$(BUILD).ipa"
 
 test:
 	xcodegen generate

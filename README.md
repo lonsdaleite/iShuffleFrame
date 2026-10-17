@@ -26,6 +26,15 @@ make test        # xcodegen generate + unit and UI tests on the iPad mini simula
 
 UI tests run the app with generated demo photos (`-ISFDemo YES`, debug builds only).
 
+```sh
+make ipa         # build/ipa/iShuffleFrame_<version>-<build>.ipa: Release build, unsigned
+```
+
+The unsigned `.ipa` is for installers that sign it themselves: TrollStore (checked on the iPad Air 2, iOS 15.8),
+Sideloadly, AltStore. Installed this way the app is sandboxed and keeps its settings and cycle in its data
+container. A build signed with the developer team (TestFlight, App Store, or development for registered devices)
+is made in Xcode from the same project.
+
 ### Legacy build
 
 ```sh
@@ -103,7 +112,8 @@ All Photos is the device photo library; iCloud shared albums are not part of it 
 
 - iPad 3 (iPad3,1), iOS 9.3.5, jailbroken: legacy build.
 - iPad mini 2 (iPad4,4), iOS 12.5.8, jailbroken: legacy build (the regular build needs iOS 15).
-- iPad Air 2, iOS 15.8, Dopamine (rootless): legacy build with `ROOTLESS=1`.
+- iPad Air 2, iOS 15.8, Dopamine (rootless): legacy build with `ROOTLESS=1`, or the regular build installed
+  with TrollStore.
 
 ## Known limits
 
