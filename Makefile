@@ -65,6 +65,8 @@ endif
 	    -e 's/$$(MARKETING_VERSION)/$(VERSION)/; s/$$(CURRENT_PROJECT_VERSION)/$(BUILD)/' \
 	    Resources/Info.plist > $(APP)/Info.plist
 	plutil -remove UILaunchStoryboardName $(APP)/Info.plist
+	# No scenes: the scene delegate is not compiled with the iOS 9.3 SDK, and iOS 9 has no scenes.
+	plutil -remove UIApplicationSceneManifest $(APP)/Info.plist
 	plutil -insert MinimumOSVersion -string $(MIN_IOS) $(APP)/Info.plist
 	plutil -insert CFBundleSupportedPlatforms -json '["iPhoneOS"]' $(APP)/Info.plist
 	plutil -insert UIDeviceFamily -json '[1,2]' $(APP)/Info.plist
@@ -86,17 +88,25 @@ deb: app
 	dpkg-deb -Zgzip --root-owner-group -b $(STAGE) $(DEB)
 	@echo "Built $(DEB)"
 
-# Regular (iOS 15+) build as an unsigned .ipa: TrollStore, Sideloadly or AltStore sign it on install.
+# Regular (iOS 15+) build as an .ipa. Unsigned by default: TrollStore, Sideloadly or AltStore sign it on install.
+# `make ipa TEAM=<team id>` signs it for development with the team's existing profiles (devices in the profile).
 IPA_DIR := build/ipa
+ifdef TEAM
+IPA_SIGNING := DEVELOPMENT_TEAM=$(TEAM) CODE_SIGN_STYLE=Automatic
+IPA_NAME    := $(NAME)_$(VERSION)-$(BUILD)_development.ipa
+else
+IPA_SIGNING := CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=
+IPA_NAME    := $(NAME)_$(VERSION)-$(BUILD).ipa
+endif
 ipa:
 	xcodegen generate
 	rm -rf $(IPA_DIR) && mkdir -p $(IPA_DIR)/Payload
 	xcodebuild -project $(NAME).xcodeproj -scheme $(NAME) -configuration Release -destination 'generic/platform=iOS' \
 	    -derivedDataPath build/DerivedData -archivePath $(IPA_DIR)/$(NAME).xcarchive \
-	    CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= archive
+	    $(IPA_SIGNING) archive
 	cp -R $(IPA_DIR)/$(NAME).xcarchive/Products/Applications/$(NAME).app $(IPA_DIR)/Payload/
-	cd $(IPA_DIR) && zip -qry $(NAME)_$(VERSION)-$(BUILD).ipa Payload
-	@echo "Built $(IPA_DIR)/$(NAME)_$(VERSION)-$(BUILD).ipa"
+	cd $(IPA_DIR) && zip -qry $(IPA_NAME) Payload
+	@echo "Built $(IPA_DIR)/$(IPA_NAME)"
 
 test:
 	xcodegen generate

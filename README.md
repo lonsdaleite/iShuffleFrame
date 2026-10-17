@@ -28,12 +28,15 @@ UI tests run the app with generated demo photos (`-ISFDemo YES`, debug builds on
 
 ```sh
 make ipa         # build/ipa/iShuffleFrame_<version>-<build>.ipa: Release build, unsigned
+make ipa TEAM=<team id>  # …_development.ipa signed with the team's existing development profile
 ```
 
 The unsigned `.ipa` is for installers that sign it themselves: TrollStore (checked on the iPad Air 2, iOS 15.8),
 Sideloadly, AltStore. Installed this way the app is sandboxed and keeps its settings and cycle in its data
-container. A build signed with the developer team (TestFlight, App Store, or development for registered devices)
-is made in Xcode from the same project.
+container. With `TEAM` the build is signed for development with automatic signing and the profiles already on this Mac
+(e.g. the team's wildcard profile), so it runs only on devices registered in that profile; install it with
+`xcrun devicectl device install app --device <udid> <app or ipa>`. TestFlight and App Store builds need an App
+ID and a distribution certificate in the developer account.
 
 ### Legacy build
 
@@ -44,6 +47,9 @@ make deb         # build/legacy/com.lonsdaleite.ishuffleframe_<version>-<build>_
 make deb ROOTLESS=1  # build/rootless/…_iphoneos-arm64.deb for rootless jailbreaks (Dopamine, palera1n)
 ```
 
+- The regular build uses the scene lifecycle (iOS 27 terminates apps built with its SDK that do not). The legacy
+  build compiles without `ISFSceneDelegate` (it needs the iOS 13 SDK) and drops the scene manifest from
+  Info.plist, so the app delegate creates the window there.
 - armv7 is compiled as ARM, not Thumb: the current linker drops the Thumb bit from the entry point and method
   addresses, and such a binary dies with SIGILL on launch.
 - The binary is signed with `packaging/entitlements.plist` (no sandbox, no data container, like Sileo or Filza).
@@ -117,7 +123,5 @@ All Photos is the device photo library; iCloud shared albums are not part of it 
 
 ## Known limits
 
-- The regular build still uses the app-delegate window lifecycle. Current iOS warns that `UIScene` will become
-  required; it has to be adopted for the regular build only (iOS 9 has no scenes).
 - On the iOS 26+ simulator `XCUIApplication.openURL` relaunches the app, so a URL sent to a running slideshow is
   only checked on a device.
