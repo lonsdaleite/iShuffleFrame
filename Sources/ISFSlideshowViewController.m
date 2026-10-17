@@ -67,6 +67,10 @@ static const NSTimeInterval ISFSaveInterval = 300;
                        name:UIApplicationDidBecomeActiveNotification object:nil];
         [center addObserver:self selector:@selector(appWillResignActive)
                        name:UIApplicationWillResignActiveNotification object:nil];
+        [center addObserver:self selector:@selector(appDidEnterBackground)
+                       name:UIApplicationDidEnterBackgroundNotification object:nil];
+        [center addObserver:self selector:@selector(appWillEnterForeground)
+                       name:UIApplicationWillEnterForegroundNotification object:nil];
     }
     return self;
 }
@@ -522,9 +526,10 @@ static const NSTimeInterval ISFSaveInterval = 300;
 
 #pragma mark - App state
 
+// The slideshow keeps going while the app is only inactive (Control Center, an alert, a screen turned off and on
+// without locking): it stops in the background, and nothing guarantees a didBecomeActive after a resign.
+
 - (void)appWillResignActive {
-    [_timer invalidate];
-    _timer = nil;
     // Scripts lock the device and kill the app right after: write before going on.
     if (_cycle.items.count) {
         _lastSave = [NSDate date];
@@ -532,7 +537,20 @@ static const NSTimeInterval ISFSaveInterval = 300;
     }
 }
 
+- (void)appDidEnterBackground {
+    [_timer invalidate];
+    _timer = nil;
+}
+
+- (void)appWillEnterForeground {
+    [self resumeTimerIfNeeded];
+}
+
 - (void)appDidBecomeActive {
+    [self resumeTimerIfNeeded];
+}
+
+- (void)resumeTimerIfNeeded {
     if (_running && !_paused && _cycle.current && !_timer && _resolvedToken == _requestToken) [self scheduleTimer];
 }
 
