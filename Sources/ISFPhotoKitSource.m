@@ -131,20 +131,26 @@ static ISFAlbumKind ISFKindForCollection(PHAssetCollection *collection) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(nil); });
         return PHInvalidImageRequestID;
     }
+    // The file data is decoded here rather than by requestImageForAsset:, which decodes some shared-album JPEGs
+    // into black images on iOS 15 (see ISFImageDataWithoutJFIF).
     PHImageRequestOptions *options = [PHImageRequestOptions new];
     options.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
-    options.resizeMode = PHImageRequestOptionsResizeModeFast;
+    options.version = PHImageRequestOptionsVersionCurrent;
     options.networkAccessAllowed = YES;
-    return [[PHImageManager defaultManager] requestImageForAsset:asset
-                                               targetSize:targetSize
-                                              contentMode:PHImageContentModeAspectFit
-                                                  options:options
-                                            resultHandler:^(UIImage *image, NSDictionary *info) {
+    CGFloat maxPixelSize = MAX(targetSize.width, targetSize.height);
+    // The iOS 13 replacement is not in the iOS 9.3 SDK of the legacy build; this one works on current iOS too.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [[PHImageManager defaultManager] requestImageDataForAsset:asset
+                                                             options:options
+                                                       resultHandler:^(NSData *data, NSString *uti,
+                                                                       UIImageOrientation orientation, NSDictionary *info) {
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            UIImage *prepared = image ? ISFPreparedImage(image, targetSize) : nil;
-            dispatch_async(dispatch_get_main_queue(), ^{ completion(prepared); });
+            UIImage *image = data ? ISFDecodedImage(data, maxPixelSize) : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(image); });
         });
     }];
+#pragma clang diagnostic pop
 }
 
 - (void)cancelImageRequest:(NSInteger)requestID {

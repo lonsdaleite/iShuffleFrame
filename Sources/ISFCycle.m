@@ -66,6 +66,23 @@ static NSArray<NSString *> *ISFStringArray(id value) {
     return _queue.firstObject;
 }
 
+- (NSArray<NSString *> *)peekNext:(NSUInteger)count {
+    NSMutableArray<NSString *> *items = [NSMutableArray arrayWithCapacity:count];
+    for (NSInteger i = _position + 1; i < (NSInteger)_history.count && items.count < count; i++) {
+        [items addObject:_history[i]];
+    }
+    if (items.count < count && _queue.count == 0) [self refill];
+    for (NSString *item in _queue) {
+        if (items.count >= count) break;
+        [items addObject:item];
+    }
+    return items;
+}
+
+- (NSString *)peekPrevious {
+    return _position > 0 ? _history[_position - 1] : nil;
+}
+
 - (void)refill {
     if (_items.count == 0) return;
     [_cycleShown removeAllObjects];

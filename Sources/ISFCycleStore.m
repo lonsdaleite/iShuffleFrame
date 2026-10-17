@@ -17,7 +17,7 @@
     return [[directory URLByAppendingPathComponent:folder] URLByAppendingPathComponent:@"cycle.plist"];
 }
 
-+ (NSDictionary *)load {
++ (NSDictionary *)loadState {
     __block NSDictionary *state;
     dispatch_sync([self queue], ^{ state = [NSDictionary dictionaryWithContentsOfURL:[self fileURL]]; });
     return state;

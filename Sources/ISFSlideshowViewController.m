@@ -1,7 +1,9 @@
 #import "ISFSlideshowViewController.h"
 #import "ISFCycleStore.h"
+#import "ISFImageLoader.h"
 
 static const NSTimeInterval ISFFadeDuration = 0.8;
+static const NSTimeInterval ISFSlideDuration = 0.3;
 /// Pause before trying the next photo when one fails to load.
 static const NSTimeInterval ISFSkipDelay = 0.5;
 /// A photo that has not loaded by then (e.g. a stalled iCloud download) counts as failed.
@@ -13,6 +15,11 @@ static const NSUInteger ISFMaxSkips = 5;
 static const NSUInteger ISFMaxRetries = 3;
 /// The pause menu closes itself after this long, so that a stray tap does not stop the frame for the day.
 static const NSTimeInterval ISFPauseMenuTimeout = 120;
+/// Photos loaded ahead of the current one, so that swipes and slow iCloud downloads do not keep the frame waiting.
+static const NSUInteger ISFPrefetchCount = 3;
+/// Decoded photos kept in memory: the prefetched ones, the current one and a few before it for swiping back.
+/// At most 12 MB each on a 2048 × 1536 screen.
+static const NSUInteger ISFImageCacheSize = 7;
 /// The cycle state is saved at most this often while photos change (and always on stop, backgrounding and
 /// library changes); a killed app replays at most a few minutes of photos.
 static const NSTimeInterval ISFSaveInterval = 300;
@@ -31,25 +38,21 @@ static const NSTimeInterval ISFSaveInterval = 300;
     BOOL _retryCurrent;
     NSUInteger _retries;
     NSDictionary *_pendingState; // saved cycle waiting for a non-empty item list (library not ready yet)
+    NSInteger _slide;          // +1/-1 while the photo for a swipe is loading, see showItem:animated:slide:
     NSInteger _direction;      // +1 forward, -1 back: where to skip a photo that fails to load
     NSString *_requestedItem;  // photo of the current request
-    NSInteger _requestID;      // source request of the current photo
     NSDate *_lastSave;
 
     dispatch_queue_t _itemsQueue; // item lists are fetched one at a time, in order
     _Atomic(NSUInteger) _itemsGeneration; // only the latest item list is fetched and applied
     BOOL _reloadPending;          // the library changed while the first item list was loading
 
-    NSString *_preloadedItem;
-    UIImage *_preloadedImage;
-    BOOL _preloading;
-    NSInteger _preloadRequestID;
-    NSUInteger _preloadToken;
-    NSUInteger _waitingForPreload; // request token that waits for the running preload
+    ISFImageLoader *_loader;
 
     UIImageView *_imageView;
     UILabel *_messageLabel;
-    UIAlertController *_pauseMenu;
+    UIView *_pauseMenu;        // overlay over the photo while paused
+    UIView *_pauseMenuPanel;
 }
 
 - (instancetype)initWithSource:(id<ISFPhotoSource>)source settings:(ISFSettings *)settings {
@@ -58,6 +61,7 @@ static const NSTimeInterval ISFSaveInterval = 300;
         _settings = settings;
         _direction = 1;
         _itemsQueue = dispatch_queue_create("ishuffleframe.items", DISPATCH_QUEUE_SERIAL);
+        _loader = [[ISFImageLoader alloc] initWithSource:source targetSize:[self targetPixelSize] capacity:ISFImageCacheSize];
         NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
         [center addObserver:self selector:@selector(appDidBecomeActive)
                        name:UIApplicationDidBecomeActiveNotification object:nil];
@@ -104,9 +108,12 @@ static const NSTimeInterval ISFSaveInterval = 300;
     left.direction = UISwipeGestureRecognizerDirectionLeft;
     UISwipeGestureRecognizer *right = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(swipedRight)];
     right.direction = UISwipeGestureRecognizerDirectionRight;
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped:)];
     [self.view addGestureRecognizer:left];
     [self.view addGestureRecognizer:right];
+    // A swipe also looks like a tap to the tap recognizer: open the menu only for touches that are not swipes.
+    [tap requireGestureRecognizerToFail:left];
+    [tap requireGestureRecognizerToFail:right];
     [self.view addGestureRecognizer:tap];
 }
 
@@ -115,10 +122,7 @@ static const NSTimeInterval ISFSaveInterval = 300;
 
 - (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
-    if (!_preloading) {
-        _preloadedItem = nil;
-        _preloadedImage = nil;
-    }
+    [_loader trimExceptItem:_cycle.current];
 }
 
 #pragma mark - Control
@@ -128,14 +132,6 @@ static const NSTimeInterval ISFSaveInterval = 300;
 }
 
 - (void)start {
-    [self startFresh:NO];
-}
-
-- (void)restart {
-    [self startFresh:YES];
-}
-
-- (void)startFresh:(BOOL)fresh {
     [self stop];
     [self loadViewIfNeeded];
 
@@ -149,7 +145,7 @@ static const NSTimeInterval ISFSaveInterval = 300;
     if (authorization == ISFAuthorizationNotDetermined) {
         [_source requestAuthorization:^(ISFAuthorization status) {
             // The user may have opened the settings meanwhile; they start the slideshow themselves.
-            if (status != ISFAuthorizationNotDetermined && !self.presentedViewController) [self startFresh:fresh];
+            if (status != ISFAuthorizationNotDetermined && !self.presentedViewController) [self start];
         }];
         return;
     }
@@ -162,8 +158,7 @@ static const NSTimeInterval ISFSaveInterval = 300;
     _source.changeHandler = ^{ [weakSelf sourceDidChange]; };
     _running = YES;
     [UIApplication sharedApplication].idleTimerDisabled = YES;
-    if (fresh) [ISFCycleStore clear];
-    NSDictionary *state = fresh ? nil : [ISFCycleStore load];
+    NSDictionary *state = [ISFCycleStore loadState];
     ISFOrder order = _settings.order;
     NSUInteger token = _startToken;
     [self loadItems:^(NSArray<NSString *> *items) {
@@ -191,14 +186,9 @@ static const NSTimeInterval ISFSaveInterval = 300;
     _pendingState = nil;
     [_timer invalidate];
     _timer = nil;
-    _preloadedItem = nil;
-    _preloadedImage = nil;
-    _preloading = NO;
-    _preloadToken++;
     _reloadPending = NO;
     [UIApplication sharedApplication].idleTimerDisabled = NO;
-    if (_pauseMenu.presentingViewController) [_pauseMenu dismissViewControllerAnimated:NO completion:nil];
-    _pauseMenu = nil;
+    [self menuClosed];
 }
 
 /// Fetches the item list off the main thread (it enumerates the whole library for All Photos).
@@ -251,17 +241,7 @@ static const NSTimeInterval ISFSaveInterval = 300;
 }
 
 - (void)cancelRequests {
-    if (_resolvedToken != _requestToken) [_source cancelImageRequest:_requestID];
-    if (_preloading) [_source cancelImageRequest:_preloadRequestID];
-}
-
-/// Drops a preload of `item` that has not finished: it may be stuck, and retries must make a new request.
-- (void)dropStalledPreloadOfItem:(NSString *)item {
-    if (!_preloading || ![item isEqualToString:_preloadedItem]) return;
-    [_source cancelImageRequest:_preloadRequestID];
-    _preloading = NO;
-    _preloadedItem = nil;
-    _preloadedImage = nil;
+    [_loader reset];
 }
 
 #pragma mark - Showing photos
@@ -274,11 +254,16 @@ static const NSTimeInterval ISFSaveInterval = 300;
 }
 
 - (void)showItem:(NSString *)item animated:(BOOL)animated {
+    [self showItem:item animated:animated slide:0];
+}
+
+/// `slide` is +1 or -1 when the photo is shown after a swipe: it slides in from that side whatever the transition.
+- (void)showItem:(NSString *)item animated:(BOOL)animated slide:(NSInteger)slide {
+    _slide = slide;
     [_timer invalidate];
     _timer = nil;
     _retryCurrent = NO;
-    if (_resolvedToken != _requestToken) [_source cancelImageRequest:_requestID];
-    _requestID = 0;
+    if (_requestedItem && _resolvedToken != _requestToken) [_loader stopWaitingForItem:_requestedItem];
     _requestedItem = item;
     NSUInteger token = ++_requestToken;
 
@@ -289,20 +274,13 @@ static const NSTimeInterval ISFSaveInterval = 300;
         return;
     }
 
-    if ([item isEqualToString:_preloadedItem]) {
-        if (_preloadedImage) {
-            _resolvedToken = token;
-            [self displayImage:_preloadedImage item:item animated:animated];
-            return;
-        }
-        if (_preloading) {
-            _waitingForPreload = token;
-            [self startWatchdogForToken:token];
-            return;
-        }
+    UIImage *cached = [_loader cachedImageForItem:item];
+    if (cached) {
+        _resolvedToken = token;
+        [self displayImage:cached item:item animated:animated];
+        return;
     }
-
-    _requestID = [_source requestImageForItem:item targetSize:[self targetPixelSize] completion:^(UIImage *image) {
+    [_loader loadItem:item completion:^(UIImage *image) {
         [self request:token finishedWithImage:image item:item animated:animated];
     }];
     [self startWatchdogForToken:token];
@@ -322,7 +300,6 @@ static const NSTimeInterval ISFSaveInterval = 300;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ISFLoadTimeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (token != self->_requestToken || token == self->_resolvedToken || !self->_running) return;
         self->_resolvedToken = token;
-        [self->_source cancelImageRequest:self->_requestID];
         [self loadFailed];
     });
 }
@@ -330,7 +307,16 @@ static const NSTimeInterval ISFSaveInterval = 300;
 - (void)displayImage:(UIImage *)image item:(NSString *)item animated:(BOOL)animated {
     _failures = 0;
     _messageLabel.hidden = YES;
-    if (animated && _settings.transition == ISFTransitionFade) {
+    if (_slide) {
+        CATransition *transition = [CATransition animation];
+        transition.type = kCATransitionPush;
+        transition.subtype = _slide > 0 ? kCATransitionFromRight : kCATransitionFromLeft;
+        transition.duration = ISFSlideDuration;
+        transition.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+        [_imageView.layer addAnimation:transition forKey:@"slide"];
+        _imageView.image = image;
+        _slide = 0;
+    } else if (animated && _settings.transition == ISFTransitionFade) {
         [UIView transitionWithView:_imageView
                           duration:ISFFadeDuration
                            options:UIViewAnimationOptionTransitionCrossDissolve
@@ -343,11 +329,11 @@ static const NSTimeInterval ISFSaveInterval = 300;
     _retries = 0;
     [self saveStateForced:NO];
     if (!_paused) [self scheduleTimer];
-    [self preloadNext];
+    [self prefetch];
 }
 
 - (void)loadFailed {
-    [self dropStalledPreloadOfItem:_requestedItem];
+    if (_requestedItem) [_loader dropItem:_requestedItem]; // it may be stuck: a retry makes a new request
     _failures++;
     if (_failures >= ISFMaxSkips) {
         // Keep the last photo on screen and retry the current one every interval; give up on it after a few
@@ -377,22 +363,11 @@ static const NSTimeInterval ISFSaveInterval = 300;
     [self showItem:[_cycle next] animated:NO];
 }
 
-- (void)preloadNext {
-    NSString *item = [_cycle peekNext];
-    if (!item || [item isEqualToString:_preloadedItem] || [item isEqualToString:_cycle.current]) return;
-    if (_preloading) [_source cancelImageRequest:_preloadRequestID];
-    _preloadedItem = item;
-    _preloadedImage = nil;
-    _preloading = YES;
-    NSUInteger token = ++_preloadToken;
-    _preloadRequestID = [_source requestImageForItem:item targetSize:[self targetPixelSize] completion:^(UIImage *image) {
-        if (token != self->_preloadToken) return;
-        self->_preloading = NO;
-        self->_preloadedImage = image;
-        if (self->_waitingForPreload == self->_requestToken) {
-            [self request:self->_requestToken finishedWithImage:image item:item animated:YES];
-        }
-    }];
+- (void)prefetch {
+    NSMutableArray<NSString *> *items = [[_cycle peekNext:ISFPrefetchCount] mutableCopy];
+    NSString *previous = [_cycle peekPrevious];
+    if (previous) [items addObject:previous];
+    [_loader prefetchItems:items];
 }
 
 - (void)showMessage:(NSString *)message {
@@ -426,7 +401,7 @@ static const NSTimeInterval ISFSaveInterval = 300;
     if (!_running || _paused || !_cycle) return;
     _direction = 1;
     _failures = 0;
-    [self showItem:[_cycle next] animated:NO];
+    [self showItem:[_cycle next] animated:NO slide:1];
 }
 
 - (void)swipedRight {
@@ -435,55 +410,92 @@ static const NSTimeInterval ISFSaveInterval = 300;
     if (!item) return;
     _direction = -1;
     _failures = 0;
-    [self showItem:item animated:NO];
+    [self showItem:item animated:NO slide:-1];
 }
 
-- (void)tapped {
-    if (_pauseMenu) return;
+- (void)tapped:(UITapGestureRecognizer *)tap {
+    if (_pauseMenu) {
+        // A tap next to the menu works like Resume.
+        if (CGRectContainsPoint(_pauseMenuPanel.frame, [tap locationInView:_pauseMenu])) return;
+        [self closeMenuResuming];
+        return;
+    }
     [self pause];
-
-    UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"Paused"
-                                                                  message:nil
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-    __weak typeof(self) weakSelf = self;
-    BOOL canResume = _running;
-    if (canResume) {
-        [menu addAction:[UIAlertAction actionWithTitle:@"Resume" style:UIAlertActionStyleDefault
-                                               handler:^(UIAlertAction *action) { [weakSelf resume]; }]];
-    }
-    [menu addAction:[UIAlertAction actionWithTitle:@"Restart" style:UIAlertActionStyleDefault
-                                           handler:^(UIAlertAction *action) { [weakSelf menuClosed]; [weakSelf restart]; }]];
-    [menu addAction:[UIAlertAction actionWithTitle:@"Settings" style:UIAlertActionStyleDefault
-                                           handler:^(UIAlertAction *action) {
-        [weakSelf menuClosed];
-        [weakSelf stop];
-        // Present the settings after the alert is gone.
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (weakSelf.settingsHandler) weakSelf.settingsHandler();
-        });
-    }]];
-    if (!canResume) {
-        [menu addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel
-                                               handler:^(UIAlertAction *action) { [weakSelf menuClosed]; }]];
-    }
-    _pauseMenu = menu;
-    [self presentViewController:menu animated:YES completion:nil];
+    [self showPauseMenu];
 
     // Nobody answered the menu: the tap was probably accidental.
+    UIView *menu = _pauseMenu;
+    __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ISFPauseMenuTimeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         ISFSlideshowViewController *strongSelf = weakSelf;
-        if (!strongSelf || strongSelf->_pauseMenu != menu) return;
-        [menu dismissViewControllerAnimated:YES completion:nil];
-        if (canResume) {
-            [strongSelf resume];
-        } else {
-            [strongSelf menuClosed];
-        }
+        if (strongSelf && strongSelf->_pauseMenu == menu) [strongSelf closeMenuResuming];
     });
 }
 
+/// A dimmed overlay with Resume (when the slideshow runs) and Settings; see tapped: for taps next to it.
+- (void)showPauseMenu {
+    UIView *overlay = [[UIView alloc] initWithFrame:self.view.bounds];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
+    overlay.accessibilityIdentifier = @"ISFPauseMenu";
+
+    UIView *panel = [UIView new];
+    panel.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.95];
+    panel.layer.cornerRadius = 14;
+    panel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
+                             UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+
+    NSMutableArray<UIView *> *rows = [NSMutableArray array];
+    UILabel *title = [UILabel new];
+    title.text = @"Paused";
+    title.textColor = [UIColor lightGrayColor];
+    title.font = [UIFont systemFontOfSize:17];
+    title.textAlignment = NSTextAlignmentCenter;
+    [rows addObject:title];
+    if (_running) [rows addObject:[self menuButtonWithTitle:@"Resume" action:@selector(closeMenuResuming)]];
+    [rows addObject:[self menuButtonWithTitle:@"Settings" action:@selector(openSettingsFromMenu)]];
+
+    const CGFloat width = 280, rowHeight = 56;
+    panel.frame = CGRectMake(0, 0, width, rowHeight * rows.count);
+    for (NSUInteger i = 0; i < rows.count; i++) {
+        rows[i].frame = CGRectMake(0, rowHeight * i, width, rowHeight);
+        [panel addSubview:rows[i]];
+    }
+    panel.center = CGPointMake(CGRectGetMidX(overlay.bounds), CGRectGetMidY(overlay.bounds));
+    [overlay addSubview:panel];
+
+    _pauseMenu = overlay;
+    _pauseMenuPanel = panel;
+    overlay.alpha = 0;
+    [self.view addSubview:overlay];
+    [UIView animateWithDuration:0.2 animations:^{ overlay.alpha = 1; }];
+}
+
+- (UIButton *)menuButtonWithTitle:(NSString *)title action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    [button setTitle:title forState:UIControlStateNormal];
+    button.titleLabel.font = [UIFont systemFontOfSize:22];
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return button;
+}
+
+- (void)closeMenuResuming {
+    if (_running) {
+        [self resume];
+    } else {
+        [self menuClosed];
+    }
+}
+
+- (void)openSettingsFromMenu {
+    [self stop];
+    if (self.settingsHandler) self.settingsHandler();
+}
+
 - (void)menuClosed {
+    [_pauseMenu removeFromSuperview];
     _pauseMenu = nil;
+    _pauseMenuPanel = nil;
 }
 
 - (void)pause {

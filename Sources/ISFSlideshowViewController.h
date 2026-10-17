@@ -4,8 +4,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Full-screen slideshow. Swipes go to the next/previous photo; a tap pauses and offers Resume, Restart
-/// and Settings.
+/// Full-screen slideshow. Swipes go to the next/previous photo; a tap pauses and offers Resume and Settings.
 @interface ISFSlideshowViewController : UIViewController
 
 - (instancetype)initWithSource:(id<ISFPhotoSource>)source settings:(ISFSettings *)settings NS_DESIGNATED_INITIALIZER;
@@ -20,8 +19,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Starts showing photos with the current settings, continuing the saved cycle.
 - (void)start;
-/// Starts showing photos with a fresh cycle.
-- (void)restart;
 /// Stops the slideshow and dismisses the pause menu.
 - (void)stop;
 

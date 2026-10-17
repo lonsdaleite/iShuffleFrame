@@ -33,6 +33,10 @@ typedef uint32_t (^ISFRandom)(uint32_t upperBound);
 - (nullable NSString *)previous;
 /// The item `next` would return, without moving.
 - (nullable NSString *)peekNext;
+/// The next `count` items `next` would return (fewer at the end of the cycle), without moving.
+- (NSArray<NSString *> *)peekNext:(NSUInteger)count;
+/// The item `previous` would return, without moving.
+- (nullable NSString *)peekPrevious;
 
 /// Replaces the item set, keeping the history and the rest of the current cycle.
 /// Removed items disappear from both; added items join the rest of the current cycle.

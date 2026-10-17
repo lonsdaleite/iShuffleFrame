@@ -53,4 +53,12 @@ typedef NS_ENUM(NSInteger, ISFAuthorization) {
 /// it on the main thread. Safe to call off the main thread.
 UIImage *ISFPreparedImage(UIImage *image, CGSize maxSize);
 
+/// Returns JPEG data without its JFIF (APP0) segment; other data is returned as is. Some JPEGs carry both JFIF
+/// and Exif headers (photos of iCloud shared albums do), and the iOS 15 decoder on A8X turns them into black images.
+NSData *ISFImageDataWithoutJFIF(NSData *data);
+
+/// Decodes image file data into an opaque bitmap no larger than `maxPixelSize` on the longer side, with the Exif
+/// orientation applied. Safe to call off the main thread.
+UIImage *_Nullable ISFDecodedImage(NSData *data, CGFloat maxPixelSize);
+
 NS_ASSUME_NONNULL_END

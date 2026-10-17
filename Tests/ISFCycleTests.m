@@ -266,4 +266,31 @@ static NSArray<NSString *> *ISFItems(NSUInteger count) {
     XCTAssertEqual(steps, (NSUInteger)999);
 }
 
+- (void)testPeekSeveralMatchesNext {
+    ISFCycle *cycle = [[ISFCycle alloc] initWithItems:ISFItems(5) order:ISFOrderShuffle random:ISFSeededRandom(4)];
+    [self take:3 from:cycle];
+    [cycle previous];
+    [cycle previous];
+    NSArray *peeked = [cycle peekNext:4];
+    XCTAssertEqual(peeked.count, 4u);
+    XCTAssertEqualObjects([self take:4 from:cycle], peeked);
+}
+
+- (void)testPeekSeveralStartsTheNextCycleWhenThisOneIsDone {
+    ISFCycle *cycle = [[ISFCycle alloc] initWithItems:ISFItems(3) order:ISFOrderSequential random:nil];
+    [self take:2 from:cycle];
+    XCTAssertEqualObjects([cycle peekNext:3], (@[@"p2"]));
+    [cycle next];
+    XCTAssertEqualObjects([cycle peekNext:2], (@[@"p0", @"p1"]));
+    XCTAssertEqualObjects([self take:2 from:cycle], (@[@"p0", @"p1"]));
+}
+
+- (void)testPeekPrevious {
+    ISFCycle *cycle = [[ISFCycle alloc] initWithItems:ISFItems(3) order:ISFOrderSequential random:nil];
+    XCTAssertNil([cycle peekPrevious]);
+    [self take:2 from:cycle];
+    XCTAssertEqualObjects([cycle peekPrevious], @"p0");
+    XCTAssertEqualObjects(cycle.current, @"p1");
+}
+
 @end

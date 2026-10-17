@@ -120,33 +120,37 @@
     XCTAssertFalse([app.switches[@"ISFAutostartSwitch"].value boolValue]);
 }
 
-- (void)testPauseResumeRestartAndSettings {
+- (void)testPauseResumeAndSettings {
     XCUIApplication *app = [self launchWithArguments:@[@"-ISFUseAllPhotos", @"YES", @"-ISFInterval", @"3600",
                                                        @"-ISFOrder", @"1"]];
     XCTAssertEqualObjects([self waitForPhotoIn:app differentFrom:nil], @"A-0");
     XCUIElement *image = [self imageIn:app];
     [image swipeLeft];
     XCTAssertEqualObjects([self waitForPhotoIn:app differentFrom:@"A-0"], @"A-1");
+    XCUIElement *menu = app.otherElements[@"ISFPauseMenu"];
+    XCTAssertFalse(menu.exists); // the swipe did not open the menu
 
     [image tap];
-    XCUIElement *menu = app.alerts[@"Paused"];
     XCTAssertTrue([menu waitForExistenceWithTimeout:5]);
-    [menu.buttons[@"Resume"] tap];
+    XCTAssertFalse(app.buttons[@"Restart"].exists);
+    [app.buttons[@"Resume"] tap];
+    XCTAssertFalse(menu.exists);
+    XCTAssertEqualObjects(image.value, @"A-1");
+
+    // A tap next to the menu resumes too.
+    [image tap];
+    XCTAssertTrue([menu waitForExistenceWithTimeout:5]);
+    [[menu coordinateWithNormalizedOffset:CGVectorMake(0.1, 0.1)] tap];
     XCTAssertFalse(menu.exists);
     XCTAssertEqualObjects(image.value, @"A-1");
 
     [image tap];
     XCTAssertTrue([menu waitForExistenceWithTimeout:5]);
-    [menu.buttons[@"Restart"] tap];
-    XCTAssertEqualObjects([self waitForPhotoIn:app differentFrom:@"A-1"], @"A-0");
-
-    [image tap];
-    XCTAssertTrue([menu waitForExistenceWithTimeout:5]);
-    [menu.buttons[@"Settings"] tap];
+    [app.buttons[@"Settings"] tap];
     [self assertSettingsShownIn:app];
     [app.cells[@"ISFStartCell"] tap];
     // Starting from the settings continues the cycle.
-    XCTAssertEqualObjects([self waitForPhotoIn:app differentFrom:@"A-0"], @"A-1");
+    XCTAssertEqualObjects([self waitForPhotoIn:app differentFrom:@"A-1"], @"A-2");
 }
 
 - (void)testRelaunchContinuesCycle {
