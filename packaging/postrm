@@ -1,0 +1,13 @@
+#!/bin/sh
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    if uicache --help 2>&1 | grep -q -- '--path'; then
+        uicache -u /Applications/iShuffleFrame.app 2>/dev/null || uicache -a
+    else
+        su -c uicache mobile 2>/dev/null || uicache
+    fi
+fi
+if [ "$1" = purge ]; then
+    rm -rf "/var/mobile/Library/Application Support/com.lonsdaleite.ishuffleframe"
+    rm -f /var/mobile/Library/Preferences/com.lonsdaleite.ishuffleframe.plist
+fi
+exit 0

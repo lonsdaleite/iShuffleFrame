@@ -1,0 +1,9 @@
+Package: @BUNDLE_ID@
+Name: iShuffleFrame
+Version: @VERSION@
+Architecture: iphoneos-arm
+Description: Photo frame slideshow of iCloud shared albums, albums or all photos.
+Maintainer: lonsdaleite
+Author: lonsdaleite
+Section: Utilities
+Depends: firmware (>= 9.3)

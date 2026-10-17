@@ -1,0 +1,58 @@
+name: iShuffleFrame
+options:
+  bundleIdPrefix: com.lonsdaleite
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    CLANG_ENABLE_OBJC_ARC: YES
+    CLANG_WARN_UNGUARDED_AVAILABILITY: YES_AGGRESSIVE
+    GCC_WARN_UNUSED_VARIABLE: YES
+targets:
+  iShuffleFrame:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - path: Resources/LaunchScreen.storyboard
+    settings:
+      base:
+        INFOPLIST_FILE: Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: com.lonsdaleite.ishuffleframe
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+  iShuffleFrameTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [Tests]
+    dependencies:
+      - target: iShuffleFrame
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        HEADER_SEARCH_PATHS: $(SRCROOT)/Sources
+  iShuffleFrameUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [UITests]
+    dependencies:
+      - target: iShuffleFrame
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: iShuffleFrame
+schemes:
+  iShuffleFrame:
+    build:
+      targets:
+        iShuffleFrame: all
+    test:
+      targets:
+        - iShuffleFrameTests
+        - iShuffleFrameUITests

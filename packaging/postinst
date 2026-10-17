@@ -1,0 +1,8 @@
+#!/bin/sh
+# Register the app with SpringBoard. Procursus uicache takes a path; old Cydia uicache rescans as mobile.
+if uicache --help 2>&1 | grep -q -- '--path'; then
+    uicache -p /Applications/iShuffleFrame.app
+else
+    su -c uicache mobile 2>/dev/null || uicache
+fi
+exit 0
